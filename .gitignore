@@ -1,0 +1,31 @@
+# Environments
+.env
+venv/
+env/
+.venv/
+
+# Caches and pyc files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Data and logs
+data/*.db
+data/*.sqlite3
+data/*.json
+data/*.txt
+logs/
+screenshots/
+memory.db
+notes.txt
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
