@@ -5,7 +5,8 @@ import logging
 import json
 
 # Add backend to path so we can import everything correctly
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.join(root_dir, "backend"))
 
 from core.logger import setup_logging
 setup_logging()

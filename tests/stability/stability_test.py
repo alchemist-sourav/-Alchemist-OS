@@ -7,7 +7,8 @@ import logging
 import asyncio
 
 # Setup path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.join(root_dir, "backend"))
 
 
 from core.logger import setup_logging
@@ -32,6 +33,7 @@ REPORT_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__fil
 
 class StabilityTester:
     def __init__(self):
+        self._validate_startup()
         self.process = psutil.Process(os.getpid())
         
         # Metrics
@@ -45,10 +47,40 @@ class StabilityTester:
         self.peak_ram_mb = self.initial_ram_mb
         
         # Schedulers
-        self.last_db_time = time.time()
-        self.last_browser_time = time.time()
-        self.last_screenshot_time = time.time()
-        self.last_planner_time = time.time()
+        self.last_db_time = 0
+        self.last_browser_time = 0
+        self.last_screenshot_time = 0
+        self.last_planner_time = 0
+
+    def _validate_startup(self):
+        logger.info("Validating startup dependencies...")
+        
+        # verify MemoryManager methods exist
+        required_memory_methods = ['save_profile', 'get_profile', 'create_agent_task']
+        for method in required_memory_methods:
+            if not hasattr(memory_manager, method):
+                logger.error(f"Validation Failed: MemoryManager missing '{method}'")
+                sys.exit(1)
+                
+        # verify Planner methods exist
+        required_planner_methods = ['process_request']
+        planner = TaskPlanner()
+        for method in required_planner_methods:
+            if not hasattr(planner, method):
+                logger.error(f"Validation Failed: TaskPlanner missing '{method}'")
+                sys.exit(1)
+                
+        # verify BrowserAgent methods exist (via registry)
+        if not registry.get_tool("browser_start"):
+            logger.error("Validation Failed: BrowserAgent 'browser_start' missing from registry")
+            sys.exit(1)
+            
+        # verify VisionAgent methods exist (via registry)
+        if not registry.get_tool("take_screenshot"):
+            logger.error("Validation Failed: VisionAgent 'take_screenshot' missing from registry")
+            sys.exit(1)
+            
+        logger.info("Startup validation passed.")
 
     def _get_ram_mb(self) -> float:
         return self.process.memory_info().rss / (1024 * 1024)
@@ -196,5 +228,16 @@ Last Updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         self._update_report()
 
 if __name__ == "__main__":
+    duration = 24.0
+    if len(sys.argv) > 1:
+        try:
+            duration = float(sys.argv[1])
+        except ValueError:
+            pass
     tester = StabilityTester()
-    tester.run(24)
+    try:
+        tester.run(duration)
+    except KeyboardInterrupt:
+        logger.info("Stability Test Interrupted by User. Generating report and exiting cleanly...")
+        tester._update_report()
+        sys.exit(0)

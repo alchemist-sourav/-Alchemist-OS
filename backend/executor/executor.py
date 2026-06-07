@@ -30,6 +30,7 @@ class AgentExecutor:
         import time
         start_time = time.time()
         execution_history = []
+        step_results = {}
         
         try:
             for idx in range(current_step_idx, len(steps)):
@@ -43,6 +44,31 @@ class AgentExecutor:
 
                 step_tool = step_data.get("tool", "")
                 args = step_data.get("args", {})
+
+                # Perform variable substitution
+                class FallbackDict(dict):
+                    def __missing__(self, key):
+                        if "result" in self:
+                            return self["result"]
+                        return "{" + key + "}"
+
+                import re
+                def repl_at(m):
+                    key = m.group(1)
+                    if key in step_results: return str(step_results[key])
+                    if "result" in step_results: return str(step_results["result"])
+                    return m.group(0)
+
+                for k, v in args.items():
+                    if isinstance(v, str):
+                        try:
+                            # Handle {var}
+                            v = v.format_map(FallbackDict(step_results))
+                            # Handle @var
+                            v = re.sub(r"@([a-zA-Z0-9_]+)", repl_at, v)
+                            args[k] = v
+                        except Exception as e:
+                            logger.error(f"Error formatting argument {k}: {e}")
 
                 logger.info(f"Requested Tool: {step_tool}")
                 logger.info(f"Arguments: {args}")
@@ -86,6 +112,12 @@ class AgentExecutor:
                             raise Exception(result)
                             
                         logger.info(f"Execution Result: SUCCESS - {str(result)[:100]}")
+                        
+                        step_results[step_tool] = result
+                        step_results["result"] = result
+                        if step_tool == "get_current_datetime":
+                            step_results["current_time"] = result
+                            
                         break # Success
                     except Exception as e:
                         attempt += 1
@@ -169,14 +201,13 @@ class AgentExecutor:
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}]
         )
+        import re
         reply = response.choices[0].message.content
         try:
+            reply = re.sub(r"^```(?:json)?\s*", "", reply.strip(), flags=re.IGNORECASE)
+            reply = re.sub(r"\s*```$", "", reply)
             reply = reply.strip()
-            if reply.startswith("```json"):
-                reply = reply[7:]
-            if reply.endswith("```"):
-                reply = reply[:-3]
-            data = json.loads(reply.strip())
+            data = json.loads(reply)
             
             reflections = f"Worked: {data.get('what_worked', '')}\nFailed: {data.get('what_failed', '')}\nImprovement: {data.get('suggested_improvement', '')}"
             success = data.get("success", True)
