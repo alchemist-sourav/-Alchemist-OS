@@ -38,7 +38,8 @@ def setup_logging():
 
     # Root Logger Configuration
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
+    root_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+    root_logger.setLevel(root_level)
     
     # Remove existing handlers to avoid duplicates
     if root_logger.hasHandlers():

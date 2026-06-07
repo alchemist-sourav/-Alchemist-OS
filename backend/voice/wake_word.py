@@ -2,8 +2,7 @@ import logging
 import time
 import threading
 import speech_recognition as sr
-import pygame
-from typing import Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger("AlchemistWakeWord")
 

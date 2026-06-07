@@ -6,7 +6,7 @@ from datetime import datetime
 
 logger = logging.getLogger("AlchemistMemory")
 
-DB_PATH = os.path.join(settings.DATA_DIR, "memory.db")
+DB_PATH = settings.DATABASE_PATH
 
 class MemoryManager:
     def __init__(self):
