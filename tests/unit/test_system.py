@@ -22,7 +22,7 @@ def test_launch_application_windows_fallback():
         
         result = launch_application("custom_app.exe")
         
-        mock_popen.assert_called_once_with("custom_app.exe", shell=True)
+        mock_popen.assert_called_once_with(["custom_app.exe"], shell=False)
         assert "Successfully launched custom_app.exe via subprocess" in result
 
 def test_launch_application_other_os():
@@ -31,7 +31,7 @@ def test_launch_application_other_os():
         
         result = launch_application("gedit")
         
-        mock_popen.assert_called_once_with("gedit", shell=True)
+        mock_popen.assert_called_once_with(["gedit"], shell=False)
         assert "Successfully launched gedit via subprocess" in result
 
 def test_launch_application_error():

@@ -108,7 +108,18 @@ class MemoryManager:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        # Semantic Memories
+        self._execute_with_retry(self.cursor.execute, """
+        CREATE TABLE IF NOT EXISTS semantic_memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            content TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
         
+        self._execute_with_retry(self.cursor.execute, "INSERT OR IGNORE INTO projects (name, description, status) VALUES ('Alchemist OS Tasks', 'Default project for Alchemist OS tasks', 'active')")
+        self._execute_with_retry(self.cursor.execute, "INSERT OR IGNORE INTO projects (name, description, status) VALUES ('Alchemist AI: Test Project', 'Test project for demos', 'active')")
         self._execute_with_retry(self.conn.commit)
 
     # ---- Profile Memory ----
@@ -170,6 +181,20 @@ class MemoryManager:
     def save_conversation(self, role: str, content: str):
         self._execute_with_retry(self.cursor.execute, "INSERT INTO conversations (role, content) VALUES (?, ?)", (role, content))
         self._execute_with_retry(self.conn.commit)
+        self.trim_conversations(100)
+
+    def trim_conversations(self, keep_limit: int = 100):
+        try:
+            self._execute_with_retry(self.cursor.execute, """
+                DELETE FROM conversations 
+                WHERE id NOT IN (
+                    SELECT id FROM conversations 
+                    ORDER BY id DESC LIMIT ?
+                )
+            """, (keep_limit,))
+            self._execute_with_retry(self.conn.commit)
+        except Exception as e:
+            logger.error(f"Error trimming conversation history: {e}")
 
     def get_recent_conversations(self, limit: int = 20):
         self._execute_with_retry(self.cursor.execute, "SELECT role, content FROM conversations ORDER BY id DESC LIMIT ?", (limit,))
@@ -301,9 +326,69 @@ class MemoryManager:
             res += f"- Goal: {goal}\n  Error: {outcome}\n  Reflections: {ref}\n"
         return res
 
+    def save_semantic_memory(self, category: str, content: str):
+        logger.info(f"Saving semantic memory [{category}]: {content}")
+        self._execute_with_retry(self.cursor.execute, 
+            "INSERT INTO semantic_memories (category, content) VALUES (?, ?)",
+            (category, content)
+        )
+        self._execute_with_retry(self.conn.commit)
+        return f"Memory saved: [{category}] {content}"
+
+    def retrieve_semantic_memories(self, query: str, limit: int = 5) -> list:
+        # Retrieve all semantic memories
+        self._execute_with_retry(self.cursor.execute, "SELECT category, content FROM semantic_memories")
+        rows = self.cursor.fetchall()
+        if not rows:
+            return []
+            
+        import re
+        import math
+        
+        def tokenize(text):
+            return re.findall(r'[a-zA-Z0-9_]+', text.lower())
+            
+        def get_freq_dict(tokens):
+            d = {}
+            for t in tokens:
+                d[t] = d.get(t, 0) + 1
+            return d
+            
+        query_tokens = tokenize(query)
+        if not query_tokens:
+            return rows[:limit]
+            
+        query_freq = get_freq_dict(query_tokens)
+        
+        results = []
+        for category, content in rows:
+            content_tokens = tokenize(content)
+            content_freq = get_freq_dict(content_tokens)
+            
+            all_words = set(query_freq.keys()) | set(content_freq.keys())
+            v1 = [query_freq.get(w, 0) for w in all_words]
+            v2 = [content_freq.get(w, 0) for w in all_words]
+            
+            dot_product = sum(x*y for x, y in zip(v1, v2))
+            mag1 = math.sqrt(sum(x*x for x in v1))
+            mag2 = math.sqrt(sum(x*x for x in v2))
+            
+            similarity = dot_product / (mag1 * mag2) if (mag1 > 0 and mag2 > 0) else 0.0
+            results.append((category, content, similarity))
+            
+        results.sort(key=lambda x: x[2], reverse=True)
+        filtered = [r for r in results if r[2] > 0.0]
+        if not filtered:
+            for category, content in rows:
+                if any(q in content.lower() for q in query_tokens):
+                    filtered.append((category, content, 0.1))
+        
+        return [(r[0], r[1]) for r in filtered[:limit]]
+
 memory_manager = MemoryManager()
 
 from tools.registry import registry
+registry.register("create_project", memory_manager.create_project)
 registry.register("add_task", memory_manager.add_task)
 registry.register("get_tasks", memory_manager.get_tasks)
 registry.register("update_task_status", memory_manager.update_task_status)
@@ -313,3 +398,9 @@ registry.register("get_all_preferences", memory_manager.get_all_preferences)
 registry.register("get_agent_metrics", memory_manager.get_agent_metrics)
 registry.register("show_successful_workflows", memory_manager.show_successful_workflows)
 registry.register("show_failed_tasks", memory_manager.show_failed_tasks)
+registry.register("get_profile", memory_manager.get_profile)
+registry.register("save_profile", memory_manager.save_profile)
+registry.register("get_memory", memory_manager.get_memory)
+registry.register("save_memory", memory_manager.save_memory)
+registry.register("save_semantic_memory", memory_manager.save_semantic_memory)
+registry.register("retrieve_semantic_memories", memory_manager.retrieve_semantic_memories)

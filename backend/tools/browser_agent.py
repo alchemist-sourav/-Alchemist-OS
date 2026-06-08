@@ -1,5 +1,6 @@
 import logging
-from playwright.sync_api import sync_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
+import asyncio
+from playwright.async_api import async_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from tools.registry import registry
 
 logger = logging.getLogger("AlchemistBrowserAgent")
@@ -12,144 +13,229 @@ class BrowserSession:
             cls._instance = super(BrowserSession, cls).__new__(cls)
             cls._instance.playwright = None
             cls._instance.browser = None
+            cls._instance.context = None
             cls._instance.page = None
         return cls._instance
 
-    def _ensure_browser(self):
+    async def _ensure_browser(self):
         try:
             if not self.playwright:
-                self.playwright = sync_playwright().start()
+                self.playwright = await async_playwright().start()
             if not self.browser or not self.browser.is_connected():
-                self.browser = self.playwright.chromium.launch(headless=False)
+                self.browser = await self.playwright.chromium.launch(headless=False)
+            if not self.context:
+                self.context = await self.browser.new_context()
             if not self.page or self.page.is_closed():
-                self.page = self.browser.new_page()
+                self.page = await self.context.new_page()
         except Exception as e:
             logger.error(f"Failed to ensure browser state: {e}. Reinitializing Playwright.")
-            self._force_restart()
+            await self._force_restart()
 
-    def _force_restart(self):
+    async def _force_restart(self):
+        try:
+            if self.context:
+                await self.context.close()
+        except Exception:
+            pass
+        try:
+            if self.browser:
+                await self.browser.close()
+        except Exception:
+            pass
         try:
             if self.playwright:
-                self.playwright.stop()
+                await self.playwright.stop()
         except Exception:
             pass
         self.playwright = None
         self.browser = None
+        self.context = None
         self.page = None
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=False)
-        self.page = self.browser.new_page()
+        
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=False)
+        self.context = await self.browser.new_context()
+        self.page = await self.context.new_page()
 
-    def start(self, url: str) -> str:
+    async def start(self, url: str) -> str:
         try:
-            self._ensure_browser()
+            await self._ensure_browser()
             
             if not url.startswith("http"):
                 url = "http://" + url
                 
-            self.page.goto(url)
-            self.page.wait_for_load_state("networkidle")
-            return f"Successfully started browser and navigated to {url}. Title: {self.page.title()}"
+            logger.info(f"Playwright: {self.playwright}")
+            logger.info(f"Browser: {self.browser}")
+            logger.info(f"Context: {self.context}")
+            logger.info(f"Page: {self.page}")
+            
+            if self.page is None:
+                raise RuntimeError("Browser page was not initialized.")
+                
+            await self.page.goto(url)
+            await self.page.wait_for_load_state("networkidle")
+            return f"Successfully started browser and navigated to {url}. Title: {await self.page.title()}"
         except Exception as e:
             logger.error(f"Error starting browser: {e}")
             return f"Failed to start browser: {e}"
 
-    def click(self, selector: str) -> str:
+    async def _locate_element(self, selector: str):
+        # We try three strategies in sequence:
+        # 1. get_by_role (try common roles: button, link, textbox, checkbox, searchbox)
+        # 2. get_by_text
+        # 3. standard page.locator(selector)
+        
+        # Strategy 1: get_by_role
+        if not any(char in selector for char in ['.', '#', '[', ']', '=', '>', '/']):
+            for role in ["button", "link", "textbox", "checkbox", "searchbox"]:
+                try:
+                    locator = self.page.get_by_role(role, name=selector, exact=False)
+                    if await locator.count() > 0:
+                        logger.info(f"Located element by role='{role}' and name='{selector}'")
+                        return locator.first
+                except Exception:
+                    pass
+
+        # Strategy 2: get_by_text
+        if not any(char in selector for char in ['.', '#', '[', ']', '=', '>', '/']):
+            try:
+                locator = self.page.get_by_text(selector, exact=False)
+                if await locator.count() > 0:
+                    logger.info(f"Located element by text='{selector}'")
+                    return locator.first
+            except Exception:
+                pass
+
+        # Strategy 3: fallback locator
+        logger.info(f"Using fallback locator for selector='{selector}'")
+        return self.page.locator(selector)
+
+    async def _capture_failure_screenshot(self, action: str) -> str:
         try:
-            self._ensure_browser()
+            import os
+            import time
+            from core.config import settings
+            filename = f"failure_{action}_{int(time.time())}.png"
+            path = os.path.join(settings.SCREENSHOTS_DIR, filename)
+            if self.page:
+                await self.page.screenshot(path=path)
+                logger.info(f"Captured failure screenshot at {path}")
+                return path
+        except Exception as e:
+            logger.error(f"Failed to capture failure screenshot: {e}")
+        return "None"
+
+    async def _get_html_snippet(self) -> str:
+        try:
+            if self.page:
+                content = await self.page.content()
+                if len(content) > 4000:
+                    return content[:2000] + "\n... [TRUNCATED] ...\n" + content[-2000:]
+                return content
+        except Exception as e:
+            logger.error(f"Failed to get HTML snippet: {e}")
+        return "None"
+
+    async def click(self, selector: str) -> str:
+        try:
+            await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started. Call browser_start first."
-            self.page.click(selector, timeout=5000)
+            
+            locator = await self._locate_element(selector)
+            await locator.click(timeout=5000)
             return f"Clicked element matching {selector}."
-        except PlaywrightError as e:
-            logger.error(f"Playwright error clicking: {e}")
-            return f"Playwright error: could not click {selector}. {e}"
         except Exception as e:
-            logger.error(f"Error clicking element: {e}")
-            return f"Error clicking element: {str(e)}"
+            logger.error(f"Error clicking element '{selector}': {e}")
+            screenshot_path = await self._capture_failure_screenshot("click")
+            html_snippet = await self._get_html_snippet()
+            logger.error(f"HTML snippet around failure: {html_snippet}")
+            return f"Error clicking element '{selector}': {str(e)}. Screenshot saved at {screenshot_path}"
 
-    def type_text(self, selector: str, text: str) -> str:
+    async def type_text(self, selector: str, text: str) -> str:
         try:
-            self._ensure_browser()
+            await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started. Call browser_start first."
-            self.page.fill(selector, text, timeout=5000)
+            
+            locator = await self._locate_element(selector)
+            await locator.fill(text, timeout=5000)
             return f"Typed '{text}' into {selector}."
-        except PlaywrightError as e:
-            logger.error(f"Playwright error typing: {e}")
-            return f"Playwright error: could not type into {selector}. {e}"
         except Exception as e:
-            logger.error(f"Error typing text: {e}")
-            return f"Error typing text: {str(e)}"
+            logger.error(f"Error typing text into '{selector}': {e}")
+            screenshot_path = await self._capture_failure_screenshot("type")
+            html_snippet = await self._get_html_snippet()
+            logger.error(f"HTML snippet around failure: {html_snippet}")
+            return f"Error typing text: {str(e)}. Screenshot saved at {screenshot_path}"
 
-    def get_html(self) -> str:
+    async def get_html(self) -> str:
         try:
-            self._ensure_browser()
+            await self._ensure_browser()
             if not self.page:
                 return "Browser not started."
-            return self.page.content()
+            return await self.page.content()
         except PlaywrightError as e:
             logger.error(f"Playwright error getting HTML: {e}")
-            self._force_restart()
+            await self._force_restart()
             return "Browser crashed. Playwright restarted."
         except Exception as e:
             logger.error(f"Error getting HTML: {e}")
             return f"Error: {str(e)}"
 
-    def read_page_title(self) -> str:
+    async def read_page_title(self) -> str:
         try:
-            self._ensure_browser()
+            await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started."
-            return f"Page title is: {self.page.title()}"
+            return f"Page title is: {await self.page.title()}"
         except Exception as e:
             logger.error(f"Error reading title: {e}")
             return f"Failed to read title: {e}"
 
-    def extract_page_text(self) -> str:
+    async def extract_page_text(self) -> str:
         try:
-            self._ensure_browser()
+            await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started."
-            text = self.page.evaluate("document.body.innerText")
+            text = await self.page.evaluate("document.body.innerText")
             return text[:4000] if text else "No text found."
         except PlaywrightError as e:
             logger.error(f"Playwright error extracting text: {e}")
-            self._force_restart()
+            await self._force_restart()
             return f"Browser crashed. Playwright restarted. {e}"
         except Exception as e:
             logger.error(f"Error extracting text: {e}")
             return f"Error extracting text: {str(e)}"
 
-    def search_google(self, query: str) -> str:
+    async def search_google(self, query: str) -> str:
         try:
-            self.start("https://www.google.com")
-            self.page.fill('textarea[name="q"]', query)
-            self.page.keyboard.press("Enter")
-            self.page.wait_for_load_state("networkidle")
-            return f"Searched Google for '{query}'. Top results page title: {self.page.title()}"
+            await self.start("https://www.google.com")
+            await self.page.fill('textarea[name="q"]', query)
+            await self.page.keyboard.press("Enter")
+            await self.page.wait_for_load_state("networkidle")
+            return f"Searched Google for '{query}'. Top results page title: {await self.page.title()}"
         except Exception as e:
             logger.error(f"Error searching Google: {e}")
             return f"Failed to search Google: {e}"
 
-    def open_linkedin(self) -> str:
-        return self.start("https://www.linkedin.com")
+    async def open_linkedin(self) -> str:
+        return await self.start("https://www.linkedin.com")
 
-    def open_github(self) -> str:
-        return self.start("https://github.com")
+    async def open_github(self) -> str:
+        return await self.start("https://github.com")
 
-    def open_chatgpt(self) -> str:
-        return self.start("https://chat.openai.com")
+    async def open_chatgpt(self) -> str:
+        return await self.start("https://chat.openai.com")
 
-    def navigate_page(self, url: str) -> str:
-        return self.start(url)
+    async def navigate_page(self, url: str) -> str:
+        return await self.start(url)
 
-    def navigate_back(self) -> str:
+    async def navigate_back(self) -> str:
         try:
-            self._ensure_browser()
+            await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started."
-            self.page.go_back()
+            await self.page.go_back()
             return "Navigated back."
         except PlaywrightError as e:
             logger.error(f"Playwright error navigating back: {e}")
@@ -158,27 +244,30 @@ class BrowserSession:
             logger.error(f"Error navigating back: {e}")
             return f"Error navigating back: {str(e)}"
 
-    def submit_form(self, selector: str) -> str:
+    async def submit_form(self, selector: str) -> str:
         try:
             if not self.page:
                 return "Error: Browser not started."
-            self.page.click(selector)
-            self.page.wait_for_load_state("networkidle")
+            await self.page.click(selector)
+            await self.page.wait_for_load_state("networkidle")
             return f"Successfully submitted form via {selector}."
         except Exception as e:
             logger.error(f"Error submitting form {selector}: {e}")
             return f"Failed to submit form: {e}"
 
-    def close(self) -> str:
+    async def close(self) -> str:
         try:
             if self.page:
-                self.page.close()
+                await self.page.close()
                 self.page = None
+            if self.context:
+                await self.context.close()
+                self.context = None
             if self.browser:
-                self.browser.close()
+                await self.browser.close()
                 self.browser = None
             if self.playwright:
-                self.playwright.stop()
+                await self.playwright.stop()
                 self.playwright = None
             return "Successfully closed browser."
         except Exception as e:
@@ -187,60 +276,61 @@ class BrowserSession:
 
 session = BrowserSession()
 
-def browser_start(url: str) -> str:
-    return session.start(url)
+async def browser_start(url: str) -> str:
+    return await session.start(url)
 
-def open_url(url: str) -> str:
-    return session.start(url)
+async def open_url(url: str) -> str:
+    return await session.start(url)
 
-def browser_click(selector: str) -> str:
-    return session.click(selector)
+async def browser_click(selector: str) -> str:
+    return await session.click(selector)
 
-def click_element(selector: str) -> str:
-    return session.click(selector)
+async def click_element(selector: str) -> str:
+    return await session.click(selector)
 
-def browser_type(selector: str, text: str) -> str:
-    return session.type_text(selector, text)
+async def browser_type(selector: str, text: str) -> str:
+    return await session.type_text(selector, text)
 
-def type_into_field(selector: str, text: str) -> str:
-    return session.type_text(selector, text)
+async def type_into_field(selector: str, text: str) -> str:
+    return await session.type_text(selector, text)
 
-def browser_get_html() -> str:
-    return session.get_html()
+async def browser_get_html() -> str:
+    return await session.get_html()
 
-def browser_close() -> str:
-    return session.close()
+async def browser_close() -> str:
+    return await session.close()
 
-def read_page_title() -> str:
-    return session.read_page_title()
+async def read_page_title() -> str:
+    return await session.read_page_title()
 
-def extract_page_text() -> str:
-    return session.extract_page_text()
+async def extract_page_text() -> str:
+    return await session.extract_page_text()
 
-def navigate_page(url: str) -> str:
-    return session.navigate_page(url)
+async def navigate_page(url: str) -> str:
+    return await session.navigate_page(url)
 
-def navigate_back() -> str:
-    return session.navigate_back()
+async def navigate_back() -> str:
+    return await session.navigate_back()
 
-def submit_form(selector: str) -> str:
-    return session.submit_form(selector)
+async def submit_form(selector: str) -> str:
+    return await session.submit_form(selector)
 
-def search_google(query: str) -> str:
-    return session.search_google(query)
+async def search_google(query: str) -> str:
+    return await session.search_google(query)
 
-def open_linkedin() -> str:
-    return session.open_linkedin()
+async def open_linkedin() -> str:
+    return await session.open_linkedin()
 
-def open_github() -> str:
-    return session.open_github()
+async def open_github() -> str:
+    return await session.open_github()
 
-def open_chatgpt() -> str:
-    return session.open_chatgpt()
+async def open_chatgpt() -> str:
+    return await session.open_chatgpt()
 
 # Register Tools
 registry.register("browser_start", browser_start)
 registry.register("open_url", open_url)
+registry.register("open_website", open_url)
 registry.register("browser_click", browser_click)
 registry.register("click_element", click_element)
 registry.register("browser_type", browser_type)

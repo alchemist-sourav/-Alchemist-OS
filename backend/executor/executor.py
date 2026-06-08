@@ -88,12 +88,21 @@ class AgentExecutor:
                     continue
                     
                 # --- SAFETY LAYER ---
+                DESTRUCTIVE_TOOLS = ["delete_file", "move_file", "kill_process", "submit_form", "shutdown_pc"]
                 if step_tool in DESTRUCTIVE_TOOLS:
                     if args.get("confirmed") != True and args.get("confirmed") != "true":
                         logger.warning(f"Validation Result: REJECTED - {step_tool} requires confirmation.")
-                        result = f"Action blocked. '{step_tool}' is a destructive action and requires user confirmation."
+                        result = f"Action blocked. '{step_tool}' is a protected action and requires user confirmation."
                         memory_manager.update_agent_task_status(task_id, "pending_confirmation")
                         execution_history.append({"tool": step_tool, "args": args, "result": result})
+                        if self.broadcast_func:
+                            await self.broadcast_func({
+                                "type": "pending_confirmation",
+                                "task_id": task_id,
+                                "tool": step_tool,
+                                "args": args,
+                                "message": result
+                            })
                         return result
 
                 logger.info("Validation Result: PASS")
@@ -106,7 +115,7 @@ class AgentExecutor:
                 attempt = 0
                 while attempt <= max_retries:
                     try:
-                        result = registry.execute(step_tool, args)
+                        result = await registry.execute(step_tool, args)
                         # Basic verification string matching
                         if isinstance(result, str) and ("Error" in result or "Failed" in result):
                             raise Exception(result)
@@ -127,6 +136,12 @@ class AgentExecutor:
                         else:
                             result = f"Error executing tool {step_tool} after {max_retries} retries: {e}"
                             logger.error(f"Execution Result: ERROR - {result}")
+                            
+                            # Trigger automated replanning
+                            logger.info(f"Triggering automated replanning for task {task_id} due to failure at step {step_tool}...")
+                            success_replanned = await self._replan_task(task_id, idx, step_tool, result)
+                            if success_replanned:
+                                return await self.execute_task(task_id)
                     
                 execution_history.append({"tool": step_tool, "args": args, "result": result})
                 
@@ -161,7 +176,73 @@ class AgentExecutor:
             
             return f"Task failed during execution: {e}"
 
-
+    async def _replan_task(self, task_id: int, failed_step_idx: int, failed_tool: str, error_msg: str) -> bool:
+        try:
+            task = memory_manager.get_agent_task(task_id)
+            goal = task["goal"]
+            all_steps = json.loads(task["steps_json"])
+            completed_steps = all_steps[:failed_step_idx]
+            
+            history_summary = ""
+            for s in completed_steps:
+                history_summary += f"- Step: {s.get('tool')}, Args: {s.get('args')} -> SUCCESS\n"
+            history_summary += f"- Step: {failed_tool} -> FAILED with error: {error_msg}\n"
+            
+            prompt = f"""
+            You are Alchemist AI's Recovery Planner.
+            The user request is: "{goal}"
+            
+            We were executing a plan, but it failed.
+            Execution History:
+            {history_summary}
+            
+            Please generate a new set of steps to complete the goal from the current state.
+            Format your output STRICTLY as a JSON object with:
+            {{
+              "goal": "{goal}",
+              "steps": [
+                {{
+                  "tool": "tool_name_here",
+                  "args": {{
+                    "arg_key": "arg_value"
+                  }}
+                }}
+              ]
+            }}
+            """
+            from planner.planner import TaskPlanner, extract_and_parse_json
+            planner = TaskPlanner()
+            reply = planner.llm_provider.generate_completion(
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            
+            data = extract_and_parse_json(reply)
+            new_steps = data.get("steps", [])
+            
+            if not new_steps:
+                logger.warning("Recovery planner did not generate any new steps.")
+                return False
+                
+            updated_steps = completed_steps + new_steps
+            memory_manager.cursor.execute(
+                "UPDATE agent_tasks SET steps_json=?, current_step=? WHERE id=?",
+                (json.dumps(updated_steps), failed_step_idx, task_id)
+            )
+            memory_manager.conn.commit()
+            logger.info(f"Task {task_id} successfully replanned. New steps: {new_steps}")
+            
+            if self.broadcast_func:
+                await self.broadcast_func({
+                    "type": "plan_replanned",
+                    "task_id": task_id,
+                    "goal": goal,
+                    "new_steps": new_steps
+                })
+            return True
+        except Exception as e:
+            logger.error(f"Failed to replan task {task_id}: {e}")
+            return False
 
     async def _generate_final_summary(self, goal: str, history: list) -> str:
         history_str = json.dumps(history, indent=2)
@@ -215,3 +296,30 @@ class AgentExecutor:
         except Exception as e:
             logger.error(f"Failed to parse reflection JSON: {reply}")
             return "Failed to parse reflection.", False
+
+async def resume_agent_execution(task_id: int, confirm: bool, broadcast_func) -> str:
+    task = memory_manager.get_agent_task(task_id)
+    if not task:
+        return "Task not found."
+        
+    if not confirm:
+        memory_manager.update_agent_task_status(task_id, "failed")
+        if broadcast_func:
+            await broadcast_func({"type": "step_complete", "step": "Action Cancelled", "result": "Action rejected by user."})
+        return "Action rejected by user. Task aborted."
+
+    steps = json.loads(task["steps_json"])
+    current_idx = task["current_step"]
+    
+    if current_idx < len(steps):
+        steps[current_idx]["args"]["confirmed"] = True
+        
+        memory_manager.cursor.execute(
+            "UPDATE agent_tasks SET steps_json=?, status='running' WHERE id=?",
+            (json.dumps(steps), task_id)
+        )
+        memory_manager.conn.commit()
+        
+        executor = AgentExecutor(broadcast_func=broadcast_func)
+        return await executor.execute_task(task_id)
+    return "No remaining steps to execute."

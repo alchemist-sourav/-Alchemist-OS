@@ -20,10 +20,11 @@ def launch_application(app_name_or_path: str) -> str:
                 # Fallback to subprocess if startfile fails (e.g., app is in PATH but startfile doesn't find it)
                 pass
                 
-        # Fallback to subprocess.Popen for both Windows (if startfile failed) and other OS
-        # We use shell=True to allow searching in the system PATH.
-        # We use creationflags to run it detached on Windows if possible, but Popen without wait is usually enough.
-        subprocess.Popen(app_name_or_path, shell=True)
+        import shlex
+        # Fallback to subprocess.Popen for both Windows and other OS.
+        # Secure against command injection by avoiding shell=True.
+        args = shlex.split(app_name_or_path, posix=(os.name != 'nt'))
+        subprocess.Popen(args, shell=False)
         return f"Successfully launched {app_name_or_path} via subprocess."
     except Exception as e:
         logger.error(f"Error launching application '{app_name_or_path}': {e}")

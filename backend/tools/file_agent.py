@@ -81,9 +81,31 @@ def read_metadata(path: str) -> str:
         logger.error(f"Error reading metadata: {e}")
         return f"Failed to read metadata: {e}"
 
+def write_file(filename=None, content="", folder_path=None, file_name=None) -> str:
+    if not filename:
+        if folder_path and file_name:
+            filename = os.path.join(folder_path, file_name)
+        elif file_name:
+            filename = file_name
+        else:
+            return "Error: No filename provided for writing."
+            
+    logger.info(f"Writing to file: {filename}")
+    try:
+        dir_name = os.path.dirname(filename)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Successfully wrote {len(content)} characters to {filename}."
+    except Exception as e:
+        logger.error(f"Error writing to file: {e}")
+        return f"Failed to write to file: {e}"
+
 # Register Tools
 registry.register("list_directory", list_directory)
 registry.register("search_files", search_files)
 registry.register("move_file", move_file)
 registry.register("delete_file", delete_file)
 registry.register("read_metadata", read_metadata)
+registry.register("write_file", write_file)

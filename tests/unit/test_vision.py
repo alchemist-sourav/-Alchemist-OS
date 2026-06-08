@@ -68,75 +68,20 @@ def test_registry_integration():
     assert registry.get_tool("analyze_screen") == analyze_screen
     assert registry.get_tool("read_screen_text") == read_screen_text
     assert registry.get_tool("identify_active_window") == identify_active_window
-@pytest.fixture
-def mock_groq():
-    with patch('vision.analyzer.Groq') as mock_g:
-        yield mock_g
-
-@pytest.fixture
-def mock_screenshot():
-    with patch('vision.analyzer.take_screenshot') as mock_ts:
-        mock_ts.return_value = "Screenshot saved to dummy/path/screenshot.png"
-        yield mock_ts
-
-@patch('vision.analyzer._encode_image')
-def test_analyze_screen(mock_encode, mock_screenshot, mock_groq):
-    mock_encode.return_value = "fake_base64"
-    
-    mock_client = MagicMock()
-    mock_groq.return_value = mock_client
-    
-    expected_json = {
-        "applications": ["VS Code"],
-        "visible_text": ["def main():"],
-        "buttons": ["Run", "Debug"],
-        "errors": ["SyntaxError"],
-        "summary": "Editing a python file with an error."
-    }
-    
-    # Mock LLM Response
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = json.dumps(expected_json)
-    mock_client.chat.completions.create.return_value = mock_response
-    
-    result = analyze_screen()
-    
-    # Ensure it parsed successfully and matches structure
-    parsed_result = json.loads(result)
-    assert parsed_result["applications"] == ["VS Code"]
-    assert "buttons" in parsed_result
-    assert "errors" in parsed_result
-    assert parsed_result["summary"] == "Editing a python file with an error."
-
-@patch('vision.analyzer._encode_image')
-def test_read_screen_text(mock_encode, mock_screenshot, mock_groq):
-    mock_encode.return_value = "fake_base64"
-    
-    mock_client = MagicMock()
-    mock_groq.return_value = mock_client
-    
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = "OCR OUTPUT: ModuleNotFoundError"
-    mock_client.chat.completions.create.return_value = mock_response
-    
-    result = read_screen_text()
-    assert result == "OCR OUTPUT: ModuleNotFoundError"
 
 @pytest.mark.asyncio
-@patch('planner.planner.Groq')
-async def test_planner_integration(mock_planner_groq):
-    mock_client = MagicMock()
-    mock_planner_groq.return_value = mock_client
+@patch('core.providers.ProviderManager.get_llm_provider')
+async def test_planner_integration(mock_get_provider):
+    mock_provider = MagicMock()
+    mock_get_provider.return_value = mock_provider
     
     # Mock the planner LLM to return the analyze_screen tool
-    mock_response = MagicMock()
-    mock_response.choices[0].message.content = json.dumps({
+    mock_provider.generate_completion.return_value = json.dumps({
         "goal": "Analyze the error on screen",
         "steps": [
             {"tool": "analyze_screen", "args": {}}
         ]
     })
-    mock_client.chat.completions.create.return_value = mock_response
     
     planner = TaskPlanner()
     

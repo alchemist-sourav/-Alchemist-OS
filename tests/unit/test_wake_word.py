@@ -31,7 +31,7 @@ def test_timeout_behavior(wake_system):
     assert wake_system.state == "listening"
     
     # Fast forward time
-    wake_system.last_speech_time = time.time() - 11.0
+    wake_system.last_speech_time = time.time() - (wake_system.timeout_seconds + 1.0)
     
     # The next run_loop iteration would do this:
     if time.time() - wake_system.last_speech_time > wake_system.timeout_seconds:

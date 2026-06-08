@@ -3,21 +3,27 @@ import time
 import threading
 import speech_recognition as sr
 from typing import Callable
+from core.config import settings
 
 logger = logging.getLogger("AlchemistWakeWord")
 
 class WakeWordSystem:
-    def __init__(self, voice_engine=None, planner_callback: Callable=None):
+    def __init__(self, voice_engine=None, planner_callback: Callable=None, broadcast_func=None, main_loop=None):
         self.state = "sleeping"
         self.recognizer = sr.Recognizer()
         self.microphone = None
         self.voice_engine = voice_engine
         self.planner_callback = planner_callback
+        self.broadcast_func = broadcast_func
+        self.main_loop = main_loop
+        
+        from core.providers import ProviderManager
+        self.stt_provider = ProviderManager.get_stt_provider()
         
         self.running = False
         self.listen_thread = None
         self.last_speech_time = time.time()
-        self.timeout_seconds = 10.0
+        self.timeout_seconds = getattr(settings, "WAKE_WORD_TIMEOUT", 15.0)
 
     def start(self):
         if self.running:
@@ -39,12 +45,29 @@ class WakeWordSystem:
             self.state = new_state
             if new_state == "listening":
                 self.last_speech_time = time.time()
+                
+            if self.broadcast_func and self.main_loop:
+                status_map = {
+                    "sleeping": "idle",
+                    "listening": "listening",
+                    "thinking": "stt",
+                    "speaking": "tts"
+                }
+                status = status_map.get(new_state, "idle")
+                try:
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(
+                        self.broadcast_func({"type": "status_update", "status": status}),
+                        self.main_loop
+                    )
+                except Exception as e:
+                    logger.error(f"Error broadcasting state transition: {e}")
 
     def _play_activation_sound(self):
         # We can play a simple ding if Pygame is available
         # But since we don't have an asset, we'll just log it.
         # In a real setup, we'd load an mp3/wav here.
-        logger.info("🎵 [Activation Sound Played] 🎵")
+        logger.info("[Activation Sound Played]")
 
     def _handle_interruption(self):
         logger.info("Interruption detected! Halting operations.")
@@ -54,14 +77,17 @@ class WakeWordSystem:
 
     def _process_audio(self, audio: sr.AudioData):
         try:
-            # For efficiency in a real setup we'd use a local model like Vosk.
-            # We use Google STT here as a fallback placeholder.
-            text = self.recognizer.recognize_google(audio).lower()
+            text = self.stt_provider.recognize(audio, self.recognizer).lower()
             logger.info(f"Heard: '{text}'")
             
             # Interruption check
             if "stop" in text:
                 self._handle_interruption()
+                return
+
+            assistant_state = self.state
+            if assistant_state == "speaking":
+                logger.info("Microphone input ignored: Assistant is speaking.")
                 return
 
             if self.state == "sleeping":
@@ -91,10 +117,20 @@ class WakeWordSystem:
         try:
             logger.info("Sending to planner...")
             if self.planner_callback:
+                if self.broadcast_func and self.main_loop:
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(
+                        self.broadcast_func({"type": "status_update", "status": "planning"}),
+                        self.main_loop
+                    )
                 response = self.planner_callback(text)
                 self.set_state("speaking")
                 if self.voice_engine:
+                    logger.info("[Microphone Paused]")
+                    logger.info("[TTS Started]")
                     self.voice_engine.speak(response)
+                    logger.info("[TTS Finished]")
+                    logger.info("[Microphone Resumed]")
         except Exception as e:
             logger.error(f"Planner execution error: {e}")
         finally:
@@ -116,10 +152,18 @@ class WakeWordSystem:
                 continue
 
             try:
+                # If assistant is speaking, pause listening/processing and wait
+                if self.state == "speaking":
+                    time.sleep(0.5)
+                    continue
+
                 # Timeout logic for listening state
                 if self.state == "listening":
-                    if time.time() - self.last_speech_time > self.timeout_seconds:
-                        logger.info("10-second timeout reached.")
+                    elapsed = time.time() - self.last_speech_time
+                    remaining = max(0.0, self.timeout_seconds - elapsed)
+                    logger.info(f"Listening... {int(remaining)} seconds remaining.")
+                    if elapsed > self.timeout_seconds:
+                        logger.info(f"{int(self.timeout_seconds)}-second timeout reached.")
                         self.set_state("sleeping")
 
                 with self.microphone as source:

@@ -1,31 +1,36 @@
-# Environments
-.env
-venv/
-env/
-.venv/
-
-# Caches and pyc files
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+
+# Virtual Environment
+venv/
+
+# Environment Variables
+.env
+.env.local
+
+# Databases
+*.db
+
+# Logs
+logs/
+*.log
+
+# Screenshots
+screenshots/
+
+# Pytest
 .pytest_cache/
 
-# Data and logs
-data/*.db
-data/*.sqlite3
-data/*.json
-data/*.txt
-logs/
-screenshots/
-memory.db
-notes.txt
+# Node
+node_modules/
+.next/
 
-# OS generated files
-.DS_Store
-Thumbs.db
+# Build
+dist/
+build/
 
-# Frontend
-frontend/node_modules/
-frontend/.next/
-frontend/out/
-frontend/build/
+# IDE
+.vscode/
+.idea/

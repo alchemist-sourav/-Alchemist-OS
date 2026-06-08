@@ -15,6 +15,10 @@ class Settings:
     LOGS_DIR: str = os.path.join(BASE_DIR, "logs")
     SCREENSHOTS_DIR: str = os.path.join(BASE_DIR, "screenshots")
     DATABASE_PATH: str = os.getenv("DATABASE_PATH", os.path.join(DATA_DIR, "memory.db"))
+    WAKE_WORD_TIMEOUT: float = float(os.getenv("WAKE_WORD_TIMEOUT", "15.0"))
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")
+    STT_PROVIDER: str = os.getenv("STT_PROVIDER", "google")
+    TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "pyttsx3")
 
     # Ensure directories exist
     os.makedirs(DATA_DIR, exist_ok=True)

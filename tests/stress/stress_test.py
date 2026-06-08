@@ -16,7 +16,7 @@ from tools.registry import registry
 from memory.database import memory_manager
 from tools.browser_agent import BrowserSession
 
-def run_stress_test():
+async def run_stress_test():
     logger.info("====================================")
     logger.info("   ALCHEMIST OS STRESS TEST SUITE")
     logger.info("====================================")
@@ -44,8 +44,8 @@ def run_stress_test():
     for i in range(100):
         try:
             # We use a completely safe tool
-            res = registry.execute("get_current_datetime", {})
-            if "Error" not in res:
+            res = await registry.execute("get_current_datetime", {})
+            if isinstance(res, str) and "Error" not in res:
                 tool_passed += 1
                 total_passed += 1
             else:
@@ -61,14 +61,14 @@ def run_stress_test():
     browser_passed = 0
     try:
         bs = BrowserSession()
-        res = bs.start("http://example.com")
+        res = await bs.start("http://example.com")
         if "Failed" in res or "Error" in res:
             logger.error(f"Failed to start browser: {res}")
             total_failed += 50
         else:
             for i in range(50):
                 # We extract text as a safe action
-                text = bs.extract_page_text()
+                text = await bs.extract_page_text()
                 if "Error" not in text:
                     browser_passed += 1
                     total_passed += 1
@@ -78,8 +78,8 @@ def run_stress_test():
         # Force a crash to test recovery
         logger.info("Forcing Playwright crash to test recovery...")
         if bs.playwright:
-            bs.playwright.stop()
-        res = bs.extract_page_text() # This should trigger recovery!
+            await bs.playwright.stop()
+        res = await bs.extract_page_text() # This should trigger recovery!
         if "restarted" in res.lower() or "Browser crashed" in res:
             logger.info("Browser recovered successfully from forced crash!")
             browser_passed += 1
@@ -106,4 +106,4 @@ def run_stress_test():
         logger.error("STRESS TEST FAILED!")
 
 if __name__ == "__main__":
-    run_stress_test()
+    asyncio.run(run_stress_test())

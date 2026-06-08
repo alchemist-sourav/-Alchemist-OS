@@ -35,12 +35,22 @@ def open_notepad():
     os.system("notepad")
     return "Opened Notepad"
 
-# File Management
-def create_file(filename):
+def create_file(filename=None, folder_path=None, file_name=None, content=""):
+    if not filename:
+        if folder_path and file_name:
+            filename = os.path.join(folder_path, file_name)
+        elif file_name:
+            filename = file_name
+        else:
+            filename = "new_file.txt"
+            
     logger.info(f"Creating file: {filename}")
     try:
-        with open(filename, "w") as f:
-            f.write("")
+        dir_name = os.path.dirname(filename)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(content)
         return f"Created file: {filename}"
     except Exception as e:
         logger.error(f"Error creating file: {e}")
