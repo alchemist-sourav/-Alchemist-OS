@@ -6,9 +6,29 @@ from tools.registry import registry
 
 logger = logging.getLogger("AlchemistFileAgent")
 
+def validate_path(path: str) -> str:
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    allowed_dirs = [
+        os.path.join(base_dir, "data"),
+        os.path.join(base_dir, "workspace"),
+        os.path.join(base_dir, "screenshots")
+    ]
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        import tempfile
+        allowed_dirs.append(tempfile.gettempdir())
+        
+    real_path = os.path.realpath(path)
+    for allowed in allowed_dirs:
+        allowed_real = os.path.realpath(allowed)
+        if real_path.startswith(allowed_real + os.sep) or real_path == allowed_real:
+            return real_path
+            
+    raise ValueError(f"Error: Path access denied: {path}")
+
 def list_directory(path: str) -> str:
     logger.info(f"Listing directory: {path}")
     try:
+        path = validate_path(path)
         if not os.path.isdir(path):
             return f"Error: '{path}' is not a valid directory."
         items = os.listdir(path)
@@ -20,6 +40,7 @@ def list_directory(path: str) -> str:
 def search_files(query: str, path: str = ".") -> str:
     logger.info(f"Searching for '{query}' in {path}")
     try:
+        path = validate_path(path)
         if not os.path.isdir(path):
             return f"Error: '{path}' is not a valid directory."
         
@@ -37,6 +58,8 @@ def search_files(query: str, path: str = ".") -> str:
 def move_file(src: str, dest: str) -> str:
     logger.info(f"Moving file from {src} to {dest}")
     try:
+        src = validate_path(src)
+        dest = validate_path(dest)
         if not os.path.exists(src):
             return f"Error: Source file '{src}' does not exist."
         shutil.move(src, dest)
@@ -48,6 +71,7 @@ def move_file(src: str, dest: str) -> str:
 def delete_file(path: str) -> str:
     logger.info(f"Deleting file: {path}")
     try:
+        path = validate_path(path)
         if not os.path.exists(path):
             return f"Error: File '{path}' does not exist."
         if os.path.isdir(path):
@@ -63,6 +87,7 @@ def delete_file(path: str) -> str:
 def read_metadata(path: str) -> str:
     logger.info(f"Reading metadata for: {path}")
     try:
+        path = validate_path(path)
         if not os.path.exists(path):
             return f"Error: Path '{path}' does not exist."
         
@@ -92,6 +117,7 @@ def write_file(filename=None, content="", folder_path=None, file_name=None) -> s
             
     logger.info(f"Writing to file: {filename}")
     try:
+        filename = validate_path(filename)
         dir_name = os.path.dirname(filename)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)

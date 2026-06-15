@@ -38,13 +38,14 @@ async def test_safety_layer_confirmed(mock_groq):
     
     executor = AgentExecutor(broadcast_func=AsyncMock())
     
-    steps_json = json.dumps([{"tool": "delete_file", "args": {"filename": "test.txt", "confirmed": True}}])
+    steps_json = json.dumps([{"tool": "delete_file", "args": {"filename": "test.txt"}}])
     task_id = memory_manager.create_agent_task("Test Destructive Confirmed", steps_json)
+    memory_manager.update_agent_task_status(task_id, "server_confirmed")
     
     with patch.object(registry, 'get_registered_tools', return_value=["delete_file"]):
         with patch.object(registry, 'execute', return_value="Deleted file test.txt") as mock_exec:
             await executor.execute_task(task_id)
-            mock_exec.assert_called_once_with("delete_file", {"filename": "test.txt", "confirmed": True})
+            mock_exec.assert_called_once_with("delete_file", {"filename": "test.txt"})
             
             task = memory_manager.get_agent_task(task_id)
             assert task["status"] == "completed"

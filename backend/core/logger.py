@@ -45,10 +45,37 @@ def setup_logging():
     if root_logger.hasHandlers():
         root_logger.handlers.clear()
 
+    # DB Error Logger
+    class DatabaseErrorHandler(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.ERROR:
+                try:
+                    from memory.database import memory_manager
+                    import traceback
+                    
+                    exc_type = ""
+                    stack_trace = ""
+                    if record.exc_info:
+                        exc_type = record.exc_info[0].__name__ if record.exc_info[0] else ""
+                        stack_trace = "".join(traceback.format_exception(*record.exc_info))
+                    
+                    component = record.name
+                    request_context = record.getMessage()
+                    
+                    # Avoid recursive logging by checking if we're already in a DB logger call
+                    if component != "AlchemistMemory":
+                        memory_manager.save_error_log(exc_type, stack_trace, component, request_context)
+                except Exception:
+                    pass
+
+    db_handler = DatabaseErrorHandler()
+    db_handler.setLevel(logging.ERROR)
+
     # We add common handlers (System + Console)
     root_logger.addHandler(system_handler)
     root_logger.addHandler(console_handler)
     root_logger.addHandler(error_handler)
+    root_logger.addHandler(db_handler)
 
     # Create specialized Action logger
     action_logger = logging.getLogger("AlchemistAction")
@@ -59,3 +86,4 @@ def setup_logging():
     # We also add the error and console handlers to the action logger so they still show up globally
     action_logger.addHandler(error_handler)
     action_logger.addHandler(console_handler)
+    action_logger.addHandler(db_handler)

@@ -308,7 +308,7 @@ If the request is conversational and requires no tools, return:
                 return final_result
                 
             except json.JSONDecodeError as e:
-                logger.error(f"JSON Parsing Error: {e} - Response: {reply}")
+                logger.exception(f"JSON Parsing Error: {e} - Response: {reply}")
                 # Fallback: treat the entire reply as assistant thought/conversational response
                 fallback_thought = reply.strip() if reply.strip() else "I'm sorry, I couldn't process that request."
                 memory_manager.save_conversation("assistant", fallback_thought)
@@ -319,7 +319,7 @@ If the request is conversational and requires no tools, return:
                 return fallback_thought
 
         except Exception as e:
-            logger.error(f"Planner Error: {e}")
+            logger.exception(f"Planner Error: {e}")
             error_reply = "Sorry, I encountered an error while connecting to the AI."
             memory_manager.save_conversation("assistant", error_reply)
             if broadcast_func:
@@ -359,4 +359,4 @@ If the request is conversational and requires no tools, return:
                 if cat and content:
                     memory_manager.save_semantic_memory(cat, content)
         except Exception as e:
-            logger.error(f"Error in background memory extraction: {e}")
+            logger.exception(f"Error in background memory extraction: {e}")

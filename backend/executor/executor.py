@@ -6,6 +6,12 @@ from tools.registry import registry
 from memory.database import memory_manager
 import time
 
+try:
+    from main import TOOL_USAGE, TASK_EXECUTION
+    METRICS_ENABLED = True
+except ImportError:
+    METRICS_ENABLED = False
+
 logger = logging.getLogger("AlchemistExecutor")
 
 DESTRUCTIVE_TOOLS = ["delete_file", "close_application", "submit_form"]
@@ -25,7 +31,8 @@ class AgentExecutor:
         current_step_idx = task["current_step"]
         
         logger.info(f"Starting execution for task {task_id}: {goal}")
-        memory_manager.update_agent_task_status(task_id, "running")
+        if task.get("status") != "server_confirmed":
+            memory_manager.update_agent_task_status(task_id, "running")
         
         import time
         start_time = time.time()
@@ -37,7 +44,7 @@ class AgentExecutor:
                 step_data = steps[idx]
                 if isinstance(step_data, str):
                     # Fallback if old format
-                    logger.error(f"Invalid format: step is string '{step_data}'. Must be {{'tool': name, 'args': {{}}}}")
+                    logger.exception(f"Invalid format: step is string '{step_data}'. Must be {{'tool': name, 'args': {{}}}}")
                     result = f"Validation Failed: Invalid schema for '{step_data}'"
                     memory_manager.update_agent_task_step(task_id, idx + 1)
                     continue
@@ -68,7 +75,7 @@ class AgentExecutor:
                             v = re.sub(r"@([a-zA-Z0-9_]+)", repl_at, v)
                             args[k] = v
                         except Exception as e:
-                            logger.error(f"Error formatting argument {k}: {e}")
+                            logger.exception(f"Error formatting argument {k}: {e}")
 
                 logger.info(f"Requested Tool: {step_tool}")
                 logger.info(f"Arguments: {args}")
@@ -90,7 +97,11 @@ class AgentExecutor:
                 # --- SAFETY LAYER ---
                 DESTRUCTIVE_TOOLS = ["delete_file", "move_file", "kill_process", "submit_form", "shutdown_pc"]
                 if step_tool in DESTRUCTIVE_TOOLS:
-                    if args.get("confirmed") != True and args.get("confirmed") != "true":
+                    # Fetch latest task status for server-side confirmation
+                    current_task = memory_manager.get_agent_task(task_id)
+                    task_status = current_task.get("status") if current_task else ""
+                    
+                    if task_status != "server_confirmed":
                         logger.warning(f"Validation Result: REJECTED - {step_tool} requires confirmation.")
                         result = f"Action blocked. '{step_tool}' is a protected action and requires user confirmation."
                         memory_manager.update_agent_task_status(task_id, "pending_confirmation")
@@ -104,11 +115,16 @@ class AgentExecutor:
                                 "message": result
                             })
                         return result
+                    else:
+                        # Reset back to running after clearing the confirmation check for this step
+                        memory_manager.update_agent_task_status(task_id, "running")
 
                 logger.info("Validation Result: PASS")
 
                 if self.broadcast_func:
                     await self.broadcast_func({"type": "step_start", "step": step_tool, "thought": f"Executing {step_tool}"})
+                
+                step_start_time = time.time()
                 
                 # Execute tool with verification/retries
                 max_retries = 2
@@ -127,6 +143,9 @@ class AgentExecutor:
                         if step_tool == "get_current_datetime":
                             step_results["current_time"] = result
                             
+                        if METRICS_ENABLED:
+                            TOOL_USAGE.labels(tool_name=step_tool).inc()
+                            
                         break # Success
                     except Exception as e:
                         attempt += 1
@@ -135,7 +154,7 @@ class AgentExecutor:
                             time.sleep(1)
                         else:
                             result = f"Error executing tool {step_tool} after {max_retries} retries: {e}"
-                            logger.error(f"Execution Result: ERROR - {result}")
+                            logger.exception(f"Execution Result: ERROR - {result}")
                             
                             # Trigger automated replanning
                             logger.info(f"Triggering automated replanning for task {task_id} due to failure at step {step_tool}...")
@@ -148,6 +167,20 @@ class AgentExecutor:
                 if self.broadcast_func:
                     await self.broadcast_func({"type": "step_complete", "step": step_tool, "result": result})
                 
+                # Log execution to audit log
+                step_success = not ("Error executing tool" in result or "Validation Failed" in result)
+                step_duration = time.time() - step_start_time if 'step_start_time' in locals() else 0.0
+                memory_manager.save_execution_log(
+                    session_id=str(task_id),
+                    request=goal,
+                    planner_decision="planner",
+                    selected_tool=step_tool,
+                    tool_args=json.dumps(args),
+                    execution_result=str(result),
+                    execution_duration=step_duration,
+                    success=step_success
+                )
+                
                 # Update DB
                 memory_manager.update_agent_task_step(task_id, idx + 1)
                 
@@ -155,6 +188,8 @@ class AgentExecutor:
                 # For now, we continue and let the next steps figure it out from history.
                 
             memory_manager.update_agent_task_status(task_id, "completed")
+            if METRICS_ENABLED:
+                TASK_EXECUTION.labels(status="completed").inc()
             
             # Post-execution Reflection
             execution_time = time.time() - start_time
@@ -166,8 +201,10 @@ class AgentExecutor:
             return final_summary
             
         except Exception as e:
-            logger.error(f"Task execution failed: {e}")
+            logger.exception(f"Task execution failed: {e}")
             memory_manager.update_agent_task_status(task_id, "failed")
+            if METRICS_ENABLED:
+                TASK_EXECUTION.labels(status="failed").inc()
             
             # Post-execution Reflection (Failure case)
             execution_time = time.time() - start_time
@@ -241,7 +278,7 @@ class AgentExecutor:
                 })
             return True
         except Exception as e:
-            logger.error(f"Failed to replan task {task_id}: {e}")
+            logger.exception(f"Failed to replan task {task_id}: {e}")
             return False
 
     async def _generate_final_summary(self, goal: str, history: list) -> str:
@@ -294,7 +331,7 @@ class AgentExecutor:
             success = data.get("success", True)
             return reflections, success
         except Exception as e:
-            logger.error(f"Failed to parse reflection JSON: {reply}")
+            logger.exception(f"Failed to parse reflection JSON: {reply}")
             return "Failed to parse reflection.", False
 
 async def resume_agent_execution(task_id: int, confirm: bool, broadcast_func) -> str:
@@ -312,10 +349,10 @@ async def resume_agent_execution(task_id: int, confirm: bool, broadcast_func) ->
     current_idx = task["current_step"]
     
     if current_idx < len(steps):
-        steps[current_idx]["args"]["confirmed"] = True
-        
+        # We no longer inject confirmed=True into args.
+        # We use server-side status instead.
         memory_manager.cursor.execute(
-            "UPDATE agent_tasks SET steps_json=?, status='running' WHERE id=?",
+            "UPDATE agent_tasks SET steps_json=?, status='server_confirmed' WHERE id=?",
             (json.dumps(steps), task_id)
         )
         memory_manager.conn.commit()

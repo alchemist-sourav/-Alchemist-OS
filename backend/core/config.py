@@ -19,10 +19,19 @@ class Settings:
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq")
     STT_PROVIDER: str = os.getenv("STT_PROVIDER", "google")
     TTS_PROVIDER: str = os.getenv("TTS_PROVIDER", "pyttsx3")
+    API_KEY: str = os.getenv("API_KEY", "alchemist_default_secret")
 
     # Ensure directories exist
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(LOGS_DIR, exist_ok=True)
     os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
+    def validate(self):
+        if not self.GROQ_API_KEY:
+            raise ValueError("CRITICAL: GROQ_API_KEY environment variable is missing!")
+        if self.API_KEY == "alchemist_default_secret" and os.getenv("NODE_ENV") == "production":
+            import logging
+            logging.warning("WARNING: Using default API_KEY in production. This is highly insecure.")
+
 settings = Settings()
+settings.validate()

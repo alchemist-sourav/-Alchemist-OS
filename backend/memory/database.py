@@ -118,6 +118,42 @@ class MemoryManager:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        # 1. Execution Audit Log
+        self._execute_with_retry(self.cursor.execute, """
+        CREATE TABLE IF NOT EXISTS agent_execution_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            session_id TEXT,
+            request TEXT,
+            planner_decision TEXT,
+            selected_tool TEXT,
+            tool_args TEXT,
+            execution_result TEXT,
+            execution_duration REAL,
+            success BOOLEAN
+        )
+        """)
+        # 2. Tool Analytics
+        self._execute_with_retry(self.cursor.execute, """
+        CREATE TABLE IF NOT EXISTS tool_metrics (
+            tool_name TEXT PRIMARY KEY,
+            usage_count INTEGER DEFAULT 0,
+            success_rate REAL DEFAULT 0.0,
+            average_execution_time REAL DEFAULT 0.0,
+            failure_rate REAL DEFAULT 0.0
+        )
+        """)
+        # 5. Error Tracking
+        self._execute_with_retry(self.cursor.execute, """
+        CREATE TABLE IF NOT EXISTS error_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            exception_type TEXT,
+            stack_trace TEXT,
+            component TEXT,
+            request_context TEXT
+        )
+        """)
         
         self._execute_with_retry(self.cursor.execute, "INSERT OR IGNORE INTO projects (name, description, status) VALUES ('Alchemist OS Tasks', 'Default project for Alchemist OS tasks', 'active')")
         self._execute_with_retry(self.cursor.execute, "INSERT OR IGNORE INTO projects (name, description, status) VALUES ('Alchemist AI: Test Project', 'Test project for demos', 'active')")
@@ -295,6 +331,57 @@ class MemoryManager:
             "success_rate": success_rate,
             "avg_execution_time": avg_time
         }
+
+    # ---- Observability & Admin ----
+    def save_execution_log(self, session_id: str, request: str, planner_decision: str, selected_tool: str, tool_args: str, execution_result: str, execution_duration: float, success: bool):
+        self._execute_with_retry(self.cursor.execute, 
+            "INSERT INTO agent_execution_logs (session_id, request, planner_decision, selected_tool, tool_args, execution_result, execution_duration, success) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_id, request, planner_decision, selected_tool, tool_args, execution_result, execution_duration, success)
+        )
+        
+        # Update tool_metrics automatically
+        self._execute_with_retry(self.cursor.execute, "SELECT usage_count, success_rate, average_execution_time FROM tool_metrics WHERE tool_name=?", (selected_tool,))
+        row = self.cursor.fetchone()
+        if row:
+            usage_count = row[0] + 1
+            # Recalculate averages
+            old_success_count = (row[1] / 100.0) * row[0]
+            new_success_count = old_success_count + (1 if success else 0)
+            new_success_rate = (new_success_count / usage_count) * 100.0
+            new_failure_rate = 100.0 - new_success_rate
+            
+            new_avg_time = ((row[2] * row[0]) + execution_duration) / usage_count
+            self._execute_with_retry(self.cursor.execute,
+                "UPDATE tool_metrics SET usage_count=?, success_rate=?, average_execution_time=?, failure_rate=? WHERE tool_name=?",
+                (usage_count, new_success_rate, new_avg_time, new_failure_rate, selected_tool)
+            )
+        else:
+            new_success_rate = 100.0 if success else 0.0
+            new_failure_rate = 100.0 - new_success_rate
+            self._execute_with_retry(self.cursor.execute,
+                "INSERT INTO tool_metrics (tool_name, usage_count, success_rate, average_execution_time, failure_rate) VALUES (?, 1, ?, ?, ?)",
+                (selected_tool, new_success_rate, execution_duration, new_failure_rate)
+            )
+        self._execute_with_retry(self.conn.commit)
+
+    def save_error_log(self, exception_type: str, stack_trace: str, component: str, request_context: str):
+        self._execute_with_retry(self.cursor.execute, 
+            "INSERT INTO error_logs (exception_type, stack_trace, component, request_context) VALUES (?, ?, ?, ?)",
+            (exception_type, stack_trace, component, request_context)
+        )
+        self._execute_with_retry(self.conn.commit)
+
+    def get_execution_logs(self, limit: int = 50):
+        self._execute_with_retry(self.cursor.execute, "SELECT id, timestamp, session_id, request, planner_decision, selected_tool, tool_args, execution_result, execution_duration, success FROM agent_execution_logs ORDER BY id DESC LIMIT ?", (limit,))
+        return [{"id": r[0], "timestamp": r[1], "session_id": r[2], "request": r[3], "planner_decision": r[4], "selected_tool": r[5], "tool_args": r[6], "execution_result": r[7], "execution_duration": r[8], "success": r[9]} for r in self.cursor.fetchall()]
+
+    def get_tool_metrics(self):
+        self._execute_with_retry(self.cursor.execute, "SELECT tool_name, usage_count, success_rate, average_execution_time, failure_rate FROM tool_metrics ORDER BY usage_count DESC")
+        return [{"tool_name": r[0], "usage_count": r[1], "success_rate": r[2], "average_execution_time": r[3], "failure_rate": r[4]} for r in self.cursor.fetchall()]
+
+    def get_error_logs(self, limit: int = 50):
+        self._execute_with_retry(self.cursor.execute, "SELECT id, timestamp, exception_type, stack_trace, component, request_context FROM error_logs ORDER BY id DESC LIMIT ?", (limit,))
+        return [{"id": r[0], "timestamp": r[1], "exception_type": r[2], "stack_trace": r[3], "component": r[4], "request_context": r[5]} for r in self.cursor.fetchall()]
 
     # ---- User Preferences ----
     def save_preference(self, category: str, preference_rule: str) -> str:

@@ -5,8 +5,36 @@ import time
 from playwright.async_api import async_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from tools.registry import registry
 from core.config import settings
+import urllib.parse
+import ipaddress
+import socket
 
 logger = logging.getLogger("AlchemistBrowserAgent")
+
+def is_url_allowed(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+            
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+            
+        if hostname.lower() in ("localhost", "169.254.169.254", "127.0.0.1", "[::1]"):
+            return False
+            
+        try:
+            ip = socket.gethostbyname(hostname)
+            ip_obj = ipaddress.ip_address(ip)
+            if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                return False
+        except Exception:
+            pass
+            
+        return True
+    except Exception:
+        return False
 
 RETRY_ATTEMPTS = 3
 
@@ -129,6 +157,9 @@ class BrowserSession:
 
             if not url.startswith("http"):
                 url = "http://" + url
+
+            if not is_url_allowed(url):
+                raise ValueError(f"URL {url} is blocked by SSRF protection.")
 
             logger.info(f"Playwright: {self.playwright}")
             logger.info(f"Browser: {self.browser}")
