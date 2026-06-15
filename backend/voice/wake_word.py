@@ -24,11 +24,22 @@ class WakeWordSystem:
         self.listen_thread = None
         self.last_speech_time = time.time()
         self.timeout_seconds = getattr(settings, "WAKE_WORD_TIMEOUT", 15.0)
+        self._audio_ready = False
+
+    def _init_audio(self):
+        try:
+            import pygame
+            pygame.mixer.init()
+            self._audio_ready = True
+        except Exception as e:
+            logger.warning(f"Audio initialization failed (continuing without sound): {e}")
+            self._audio_ready = False
 
     def start(self):
         if self.running:
             return
-            
+
+        self._init_audio()
         self.running = True
         logger.info("Starting Wake Word System in background...")
         self.listen_thread = threading.Thread(target=self._run_loop, daemon=True)

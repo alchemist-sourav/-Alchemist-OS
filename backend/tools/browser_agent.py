@@ -1,9 +1,35 @@
 import logging
 import asyncio
+import os
+import time
 from playwright.async_api import async_playwright, Error as PlaywrightError, TimeoutError as PlaywrightTimeoutError
 from tools.registry import registry
+from core.config import settings
 
 logger = logging.getLogger("AlchemistBrowserAgent")
+
+RETRY_ATTEMPTS = 3
+
+
+async def _retry_playwright(coro_factory, operation: str):
+    """Retry Playwright operations with exponential backoff."""
+    last_error = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return await coro_factory()
+        except (PlaywrightTimeoutError, PlaywrightError) as e:
+            last_error = e
+            if attempt < RETRY_ATTEMPTS - 1:
+                delay = 2 ** attempt
+                logger.warning(
+                    f"Playwright {operation} failed (attempt {attempt + 1}/{RETRY_ATTEMPTS}): {e}. "
+                    f"Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Playwright {operation} failed after {RETRY_ATTEMPTS} attempts: {e}")
+    raise last_error
+
 
 class BrowserSession:
     _instance = None
@@ -17,6 +43,11 @@ class BrowserSession:
             cls._instance.page = None
         return cls._instance
 
+    def _configure_context(self):
+        if self.context:
+            self.context.set_default_timeout(15000)
+            self.context.set_default_navigation_timeout(30000)
+
     async def _ensure_browser(self):
         try:
             if not self.playwright:
@@ -25,6 +56,7 @@ class BrowserSession:
                 self.browser = await self.playwright.chromium.launch(headless=False)
             if not self.context:
                 self.context = await self.browser.new_context()
+                self._configure_context()
             if not self.page or self.page.is_closed():
                 self.page = await self.context.new_page()
         except Exception as e:
@@ -33,47 +65,80 @@ class BrowserSession:
 
     async def _force_restart(self):
         try:
+            if self.page and not self.page.is_closed():
+                await self.page.close()
+                logger.info("Force restart: page closed.")
+        except Exception as e:
+            logger.warning(f"Force restart: error closing page: {e}")
+        try:
             if self.context:
                 await self.context.close()
-        except Exception:
-            pass
+                logger.info("Force restart: context closed.")
+        except Exception as e:
+            logger.warning(f"Force restart: error closing context: {e}")
         try:
             if self.browser:
                 await self.browser.close()
-        except Exception:
-            pass
+                logger.info("Force restart: browser closed.")
+        except Exception as e:
+            logger.warning(f"Force restart: error closing browser: {e}")
         try:
             if self.playwright:
                 await self.playwright.stop()
-        except Exception:
-            pass
+                logger.info("Force restart: playwright stopped.")
+        except Exception as e:
+            logger.warning(f"Force restart: error stopping playwright: {e}")
         self.playwright = None
         self.browser = None
         self.context = None
         self.page = None
-        
+
         self.playwright = await async_playwright().start()
         self.browser = await self.playwright.chromium.launch(headless=False)
         self.context = await self.browser.new_context()
+        self._configure_context()
         self.page = await self.context.new_page()
+
+    async def _navigate(self, url: str):
+        await _retry_playwright(
+            lambda: self.page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=30000,
+            ),
+            "goto",
+        )
+        await self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+
+    async def _click_locator(self, locator):
+        await locator.wait_for(state="visible", timeout=10000)
+        await _retry_playwright(
+            lambda: locator.click(timeout=15000),
+            "click",
+        )
+
+    async def _fill_locator(self, locator, text: str):
+        await _retry_playwright(
+            lambda: locator.fill(text, timeout=15000),
+            "fill",
+        )
 
     async def start(self, url: str) -> str:
         try:
             await self._ensure_browser()
-            
+
             if not url.startswith("http"):
                 url = "http://" + url
-                
+
             logger.info(f"Playwright: {self.playwright}")
             logger.info(f"Browser: {self.browser}")
             logger.info(f"Context: {self.context}")
             logger.info(f"Page: {self.page}")
-            
+
             if self.page is None:
                 raise RuntimeError("Browser page was not initialized.")
-                
-            await self.page.goto(url)
-            await self.page.wait_for_load_state("networkidle")
+
+            await self._navigate(url)
             return f"Successfully started browser and navigated to {url}. Title: {await self.page.title()}"
         except Exception as e:
             logger.error(f"Error starting browser: {e}")
@@ -84,7 +149,7 @@ class BrowserSession:
         # 1. get_by_role (try common roles: button, link, textbox, checkbox, searchbox)
         # 2. get_by_text
         # 3. standard page.locator(selector)
-        
+
         # Strategy 1: get_by_role
         if not any(char in selector for char in ['.', '#', '[', ']', '=', '>', '/']):
             for role in ["button", "link", "textbox", "checkbox", "searchbox"]:
@@ -112,10 +177,8 @@ class BrowserSession:
 
     async def _capture_failure_screenshot(self, action: str) -> str:
         try:
-            import os
-            import time
-            from core.config import settings
             filename = f"failure_{action}_{int(time.time())}.png"
+            os.makedirs(settings.SCREENSHOTS_DIR, exist_ok=True)
             path = os.path.join(settings.SCREENSHOTS_DIR, filename)
             if self.page:
                 await self.page.screenshot(path=path)
@@ -141,9 +204,9 @@ class BrowserSession:
             await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started. Call browser_start first."
-            
+
             locator = await self._locate_element(selector)
-            await locator.click(timeout=5000)
+            await self._click_locator(locator)
             return f"Clicked element matching {selector}."
         except Exception as e:
             logger.error(f"Error clicking element '{selector}': {e}")
@@ -157,9 +220,9 @@ class BrowserSession:
             await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started. Call browser_start first."
-            
+
             locator = await self._locate_element(selector)
-            await locator.fill(text, timeout=5000)
+            await self._fill_locator(locator, text)
             return f"Typed '{text}' into {selector}."
         except Exception as e:
             logger.error(f"Error typing text into '{selector}': {e}")
@@ -210,9 +273,10 @@ class BrowserSession:
     async def search_google(self, query: str) -> str:
         try:
             await self.start("https://www.google.com")
-            await self.page.fill('textarea[name="q"]', query)
+            locator = self.page.locator('textarea[name="q"]')
+            await self._fill_locator(locator, query)
             await self.page.keyboard.press("Enter")
-            await self.page.wait_for_load_state("networkidle")
+            await self.page.wait_for_load_state("domcontentloaded", timeout=10000)
             return f"Searched Google for '{query}'. Top results page title: {await self.page.title()}"
         except Exception as e:
             logger.error(f"Error searching Google: {e}")
@@ -246,10 +310,12 @@ class BrowserSession:
 
     async def submit_form(self, selector: str) -> str:
         try:
+            await self._ensure_browser()
             if not self.page:
                 return "Error: Browser not started."
-            await self.page.click(selector)
-            await self.page.wait_for_load_state("networkidle")
+            locator = self.page.locator(selector)
+            await self._click_locator(locator)
+            await self.page.wait_for_load_state("domcontentloaded", timeout=10000)
             return f"Successfully submitted form via {selector}."
         except Exception as e:
             logger.error(f"Error submitting form {selector}: {e}")
@@ -258,17 +324,37 @@ class BrowserSession:
     async def close(self) -> str:
         try:
             if self.page:
-                await self.page.close()
-                self.page = None
+                try:
+                    await self.page.close()
+                    logger.info("Browser page closed.")
+                except Exception as e:
+                    logger.warning(f"Error closing page: {e}")
+                finally:
+                    self.page = None
             if self.context:
-                await self.context.close()
-                self.context = None
+                try:
+                    await self.context.close()
+                    logger.info("Browser context closed.")
+                except Exception as e:
+                    logger.warning(f"Error closing context: {e}")
+                finally:
+                    self.context = None
             if self.browser:
-                await self.browser.close()
-                self.browser = None
+                try:
+                    await self.browser.close()
+                    logger.info("Browser closed.")
+                except Exception as e:
+                    logger.warning(f"Error closing browser: {e}")
+                finally:
+                    self.browser = None
             if self.playwright:
-                await self.playwright.stop()
-                self.playwright = None
+                try:
+                    await self.playwright.stop()
+                    logger.info("Playwright stopped.")
+                except Exception as e:
+                    logger.warning(f"Error stopping playwright: {e}")
+                finally:
+                    self.playwright = None
             return "Successfully closed browser."
         except Exception as e:
             logger.error(f"Error closing browser: {e}")
