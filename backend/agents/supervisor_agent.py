@@ -60,7 +60,7 @@ class SupervisorAgent(BaseAgent):
                 else:
                     task_info["status"] = "failed"
                     from database.database import memory_manager
-                    memory_manager.update_agent_task_status(int(task_id), "failed")
+                    memory_manager.update_agent_task_status(task_id, "failed")
                     
                     # Log to memory agent for self-improvement
                     mem_msg = AgentMessage(
@@ -85,7 +85,7 @@ class SupervisorAgent(BaseAgent):
             logger.info(f"Task {task_id} completed.")
             task_info["status"] = "completed"
             from database.database import memory_manager
-            memory_manager.update_agent_task_status(int(task_id), "completed")
+            memory_manager.update_agent_task_status(task_id, "completed")
             return
             
         step = task_info["steps"][task_info["current_step"]]

@@ -13,7 +13,7 @@ setup_logging()
 logger = logging.getLogger("AlchemistStressTest")
 
 from tools.registry import registry
-from memory.database import memory_manager
+from database.database import memory_manager
 from tools.browser_agent import BrowserSession
 
 async def run_stress_test():

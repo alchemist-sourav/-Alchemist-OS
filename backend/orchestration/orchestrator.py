@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 from agents.base_agent import AgentMessage
 from agents.registry import AgentRegistry
-from memory.database import memory_manager
+from database.database import memory_manager
 import logging
 
 logger = logging.getLogger("TaskOrchestrator")
@@ -30,6 +30,7 @@ class TaskOrchestrator:
         await AgentRegistry.route_message(message)
 
     def get_task_status(self, task_id: str):
-        return memory_manager.get_agent_task(int(task_id))
+        # task_id is a UUID string; fetch directly without casting
+        return memory_manager.get_agent_task(task_id)
 
 orchestrator = TaskOrchestrator()

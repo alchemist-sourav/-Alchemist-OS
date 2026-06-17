@@ -50,7 +50,7 @@ def setup_logging():
         def emit(self, record):
             if record.levelno >= logging.ERROR:
                 try:
-                    from memory.database import memory_manager
+                    from database.database import memory_manager
                     import traceback
                     
                     exc_type = ""

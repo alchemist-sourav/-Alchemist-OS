@@ -3,8 +3,9 @@ import os
 import sys
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+DATA_DIR = os.path.join(os.path.dirname(BASE_DIR), "data")
 DB_PATH = os.path.join(DATA_DIR, "memory.db")
+os.makedirs(DATA_DIR, exist_ok=True)
 
 def init_migrations(cursor):
     cursor.execute("""
@@ -25,6 +26,19 @@ MIGRATIONS = [
     "SELECT 1",
     # version 2: Example migration
     "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)",
+    # version 3: Ensure agent_tasks.id is TEXT (UUID) - recreate table if needed
+    """CREATE TABLE IF NOT EXISTS agent_tasks_new (
+        id TEXT PRIMARY KEY,
+        goal TEXT,
+        status TEXT,
+        current_step INTEGER DEFAULT 0,
+        steps_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        completed_at DATETIME
+    )""",
+    "INSERT OR IGNORE INTO agent_tasks_new SELECT CAST(id AS TEXT), goal, status, current_step, steps_json, created_at, completed_at FROM agent_tasks",
+    "DROP TABLE IF EXISTS agent_tasks",
+    "ALTER TABLE agent_tasks_new RENAME TO agent_tasks",
 ]
 
 def upgrade():

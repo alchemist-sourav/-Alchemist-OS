@@ -2,8 +2,8 @@ import pytest
 import asyncio
 from agents.base_agent import BaseAgent, AgentMessage
 from agents.registry import AgentRegistry
-from agents.orchestrator import orchestrator
-from memory.database import memory_manager
+from orchestration.orchestrator import orchestrator
+from database.database import memory_manager
 
 class MockAgent(BaseAgent):
     def __init__(self, name):

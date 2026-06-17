@@ -10,7 +10,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from planner.planner import TaskPlanner
 from voice.wake_word import WakeWordSystem
 from executor.executor import AgentExecutor
-from memory.database import memory_manager
+from database.database import memory_manager
 from tools.registry import registry
 
 logging.basicConfig(level=logging.INFO)

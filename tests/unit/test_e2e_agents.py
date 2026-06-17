@@ -22,17 +22,23 @@ async def test_end_to_end_orchestration():
     # Simulate the planner agent triggering orchestrator, routing to supervisor, failing, retrying, and dropping
     from agents.base_agent import AgentMessage
     from agents.registry import AgentRegistry
-    from agents.orchestrator import orchestrator
+    from orchestration.orchestrator import orchestrator
     from agents.supervisor_agent import SupervisorAgent
     from agents.browser_agent import BrowserAgent
-    from memory.database import memory_manager
+    from database.database import memory_manager
     
     # ensure agents are registered
     AgentRegistry.register_agent(SupervisorAgent())
     AgentRegistry.register_agent(BrowserAgent())
     
+    # Register a mock tool to bypass real browser execution
+    from tools.registry import registry
+    async def browser_mock(url):
+        return "Success"
+    registry.register("browser_mock", browser_mock)
+
     task_id = "test_e2e_task"
-    steps = [{"tool": "browser_start", "args": {"url": "http://example.com"}}]
+    steps = [{"tool": "browser_mock", "args": {"url": "http://example.com"}}]
     
     await orchestrator.route_task(task_id, "test_goal", steps)
     

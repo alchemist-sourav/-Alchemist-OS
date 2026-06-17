@@ -2,7 +2,7 @@ import pytest
 import json
 from unittest.mock import patch, MagicMock, AsyncMock
 from executor.executor import AgentExecutor
-from memory.database import memory_manager
+from database.database import memory_manager
 from tools.registry import registry
 
 @pytest.fixture(autouse=True)

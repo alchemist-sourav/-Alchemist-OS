@@ -55,7 +55,7 @@ class PlannerAgent(BaseAgent):
             from planner.planner import extract_and_parse_json
             data = extract_and_parse_json(reply)
             
-            from agents.orchestrator import orchestrator
+            from orchestration.orchestrator import orchestrator
             import asyncio
             
             goal = data.get("goal", "respond")
@@ -74,7 +74,23 @@ class PlannerAgent(BaseAgent):
                     "thought": thought
                 }
             )
-            self.send_message(reply_msg)
+            # Directly broadcast plan result to all WebSocket clients instead of routing via AgentRegistry
+            try:
+                from main import manager
+                import json as _json
+                async def broadcast_plan():
+                    payload = _json.dumps({
+                        "type": "plan_result",
+                        "task_id": message.task_id,
+                        "goal": goal,
+                        "thought": thought,
+                        "steps": steps
+                    })
+                    for ws in manager.active_connections:
+                        await manager.send_personal_message(_json.loads(payload), ws)
+                asyncio.create_task(broadcast_plan())
+            except Exception:
+                pass
             
             # If voice agent is to be used, speak the thought
             if thought:

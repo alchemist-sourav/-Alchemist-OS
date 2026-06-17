@@ -1,6 +1,6 @@
 import time
 from typing import Dict, Any, Callable
-from memory.database import memory_manager
+from database.database import memory_manager
 import logging
 from dataclasses import dataclass, asdict
 import json

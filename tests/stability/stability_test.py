@@ -25,7 +25,7 @@ import tools.computer
 import vision.screen
 import vision.analyzer
 
-from memory.database import memory_manager
+from database.database import memory_manager
 from planner.planner import TaskPlanner
 from executor.executor import AgentExecutor
 

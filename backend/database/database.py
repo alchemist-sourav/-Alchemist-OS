@@ -78,7 +78,7 @@ class MemoryManager:
         # Agent Autonomous Tasks
         self._execute_with_retry(self.cursor.execute, """
         CREATE TABLE IF NOT EXISTS agent_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,  -- UUID string
             goal TEXT,
             status TEXT,
             current_step INTEGER DEFAULT 0,
@@ -229,12 +229,12 @@ class MemoryManager:
         self._execute_with_retry(self.cursor.execute, "SELECT id, description, status FROM tasks WHERE project_id=?", (project_id,))
         return self.cursor.fetchall()
 
-    def update_task_status(self, task_id: int, status: str):
+    def update_task_status(self, task_id: str, status: str):
         self._execute_with_retry(self.cursor.execute, "UPDATE tasks SET status=? WHERE id=?", (status, task_id))
         self._execute_with_retry(self.conn.commit)
         return f"Task {task_id} status updated to {status}."
 
-    def delete_task(self, task_id: int):
+    def delete_task(self, task_id: str):
         self._execute_with_retry(self.cursor.execute, "DELETE FROM tasks WHERE id=?", (task_id,))
         self._execute_with_retry(self.conn.commit)
         return f"Task {task_id} deleted."
@@ -282,15 +282,18 @@ class MemoryManager:
         return result[0] if result else None
 
     # ---- Agent Tasks Memory ----
-    def create_agent_task(self, goal: str, steps_json: str) -> int:
-        self._execute_with_retry(self.cursor.execute, 
-            "INSERT INTO agent_tasks (goal, status, current_step, steps_json) VALUES (?, 'pending', 0, ?)",
-            (goal, steps_json)
+    def create_agent_task(self, goal: str, steps_json: str) -> str:
+        """Create a new agent task with a UUID string as the primary key."""
+        import uuid
+        task_id = str(uuid.uuid4())
+        self._execute_with_retry(self.cursor.execute,
+            "INSERT INTO agent_tasks (id, goal, status, current_step, steps_json) VALUES (?, ?, 'pending', 0, ?)",
+            (task_id, goal, steps_json)
         )
         self._execute_with_retry(self.conn.commit)
-        return self.cursor.lastrowid
+        return task_id
 
-    def update_agent_task_status(self, task_id: int, status: str):
+    def update_agent_task_status(self, task_id: str, status: str):
         if status in ['completed', 'failed']:
             self._execute_with_retry(self.cursor.execute, 
                 "UPDATE agent_tasks SET status=?, completed_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -303,14 +306,14 @@ class MemoryManager:
             )
         self._execute_with_retry(self.conn.commit)
 
-    def update_agent_task_step(self, task_id: int, step_index: int):
+    def update_agent_task_step(self, task_id: str, step_index: int):
         self._execute_with_retry(self.cursor.execute, 
             "UPDATE agent_tasks SET current_step=? WHERE id=?",
             (step_index, task_id)
         )
         self._execute_with_retry(self.conn.commit)
 
-    def get_agent_task(self, task_id: int) -> dict | None:
+    def get_agent_task(self, task_id: str) -> dict | None:
         self._execute_with_retry(self.cursor.execute, 
             "SELECT id, goal, status, current_step, steps_json, created_at, completed_at FROM agent_tasks WHERE id=?",
             (task_id,)

@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 from agents.base_agent import BaseAgent, AgentMessage
 import logging
-from memory.database import memory_manager
+from database.database import memory_manager
 
 logger = logging.getLogger("AgentRegistry")
 

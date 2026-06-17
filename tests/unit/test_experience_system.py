@@ -3,7 +3,7 @@ import json
 from unittest.mock import patch, MagicMock, AsyncMock
 from executor.executor import AgentExecutor
 from planner.planner import TaskPlanner
-from memory.database import memory_manager
+from database.database import memory_manager
 
 @pytest.fixture(autouse=True)
 def setup_db():
