@@ -156,9 +156,25 @@ async def lifespan(app: FastAPI):
     from planner.planner import TaskPlanner
     from voice.wake_word import WakeWordSystem
     
-    global global_voice_engine, global_planner, global_wake_word
+    # Initialize Agents
+    from agents.registry import AgentRegistry
+    from agents.planner_agent import PlannerAgent
+    from agents.browser_agent import BrowserAgent
+    from agents.system_agent import SystemAgent
+    from agents.memory_agent import MemoryAgent
+    from agents.voice_agent import VoiceAgent
+    from agents.supervisor_agent import SupervisorAgent
+    from agents.orchestrator import orchestrator
+    
+    AgentRegistry.register_agent(PlannerAgent())
+    AgentRegistry.register_agent(BrowserAgent())
+    AgentRegistry.register_agent(SystemAgent())
+    AgentRegistry.register_agent(MemoryAgent())
+    AgentRegistry.register_agent(VoiceAgent())
+    AgentRegistry.register_agent(SupervisorAgent())
+    
+    global global_voice_engine, global_wake_word
     global_voice_engine = VoiceEngine()
-    global_planner = TaskPlanner()
     
     main_loop = asyncio.get_running_loop()
     
@@ -170,12 +186,27 @@ async def lifespan(app: FastAPI):
 
     # We define a synchronous wrapper for the planner since WakeWord runs in a thread
     def planner_callback(text: str) -> str:
+        import uuid
+        from agents.base_agent import AgentMessage
+        task_id = str(uuid.uuid4())
+        msg = AgentMessage(
+            sender="wake_word",
+            receiver="planner_agent",
+            task_id=task_id,
+            priority="high",
+            payload={
+                "action": "plan_task",
+                "user_text": text,
+                "session_id": "default"
+            }
+        )
         try:
             future = asyncio.run_coroutine_threadsafe(
-                global_planner.process_request(text, real_broadcast), 
+                AgentRegistry.route_message(msg), 
                 main_loop
             )
-            return future.result(timeout=120.0)
+            future.result(timeout=120.0)
+            return "Task accepted."
         except Exception as e:
             logger.error(f"Error in thread-safe planner execution: {e}")
             return "Sorry, there was an execution error."
@@ -229,7 +260,23 @@ async def websocket_endpoint(websocket: WebSocket, api_key: str = None):
                 await personal_broadcast({"type": "chat_message", "role": "user", "content": user_text})
                 
                 # We spawn the planner request in a task so it doesn't block the socket
-                asyncio.create_task(global_planner.process_request(user_text, personal_broadcast))
+                from agents.base_agent import AgentMessage
+                from agents.registry import AgentRegistry
+                import uuid
+                
+                task_id = str(uuid.uuid4())
+                msg = AgentMessage(
+                    sender="websocket",
+                    receiver="planner_agent",
+                    task_id=task_id,
+                    priority="high",
+                    payload={
+                        "action": "plan_task",
+                        "user_text": user_text,
+                        "session_id": "default"
+                    }
+                )
+                asyncio.create_task(AgentRegistry.route_message(msg))
             elif payload.get("type") == "confirm_action":
                 task_id = payload.get("task_id")
                 from executor.executor import resume_agent_execution
@@ -322,6 +369,11 @@ if METRICS_ENABLED:
     @app.get("/metrics")
     def metrics():
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+@app.get("/admin/agents")
+def admin_agents():
+    from agents.registry import AgentRegistry
+    return {"agents": AgentRegistry.health_check()}
 
 if __name__ == "__main__":
     import uvicorn

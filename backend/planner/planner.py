@@ -4,7 +4,7 @@ import re
 import asyncio
 from groq import Groq
 from core.config import settings
-from memory.database import memory_manager
+from database.database import memory_manager
 from tools.registry import registry
 
 logger = logging.getLogger("AlchemistPlanner")

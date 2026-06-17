@@ -154,6 +154,31 @@ class MemoryManager:
             request_context TEXT
         )
         """)
+        # Agent Messages
+        self._execute_with_retry(self.cursor.execute, """
+        CREATE TABLE IF NOT EXISTS agent_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender TEXT,
+            receiver TEXT,
+            task_id TEXT,
+            priority TEXT,
+            payload TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        # Agent Metrics
+        self._execute_with_retry(self.cursor.execute, """
+        CREATE TABLE IF NOT EXISTS agent_metrics (
+            agent_name TEXT PRIMARY KEY,
+            active_status BOOLEAN DEFAULT 0,
+            last_heartbeat DATETIME,
+            task_count INTEGER DEFAULT 0,
+            failure_count INTEGER DEFAULT 0,
+            avg_response_time REAL DEFAULT 0.0,
+            retry_count INTEGER DEFAULT 0,
+            delegation_count INTEGER DEFAULT 0
+        )
+        """)
         
         self._execute_with_retry(self.cursor.execute, "INSERT OR IGNORE INTO projects (name, description, status) VALUES ('Alchemist OS Tasks', 'Default project for Alchemist OS tasks', 'active')")
         self._execute_with_retry(self.cursor.execute, "INSERT OR IGNORE INTO projects (name, description, status) VALUES ('Alchemist AI: Test Project', 'Test project for demos', 'active')")
